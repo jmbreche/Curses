@@ -156,7 +156,7 @@ def train():
         i = tf.keras.layers.Input(shape=(), dtype=tf.string, name="text")
         x = preprocessor(i)
         x = encoder(x)
-        x = tf.keras.layers.Dropout(.2, name="dropout")(x["pooled_output"])
+        x = tf.keras.layers.Dropout(.5, name="dropout")(x["pooled_output"])
         x = tf.keras.layers.Dense(num_classes, activation="softmax", name="output")(x)
 
         n_epochs = 100
@@ -189,7 +189,8 @@ def train():
             y_train,
             epochs=n_epochs,
             validation_data=(x_test, y_test),
-            callbacks=[earlystop_callback]
+            callbacks=[earlystop_callback],
+            use_multiprocessing=True
         )
 
         metric_list = list(model_fit.history.keys())
