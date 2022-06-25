@@ -1,109 +1,34 @@
+import os
 import re
 import json
 import nltk
 import argparse
-import fasttext
+import numpy as np
 import pandas as pd
+import tensorflow as tf
+import tensorflow_hub as hub
+import tensorflow_text as text
+import matplotlib.pyplot as plt
+from keras import backend
 from nltk.corpus import wordnet
 from alive_progress import alive_bar
 from nltk.stem import WordNetLemmatizer
+from sklearn.model_selection import train_test_split
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--clean", help="reclean the dataset", action="store_true")
-parser.add_argument("--train", help="retrain the model", action="store_true")
-parser.add_argument("--nobs", help="number of observations to consider", type=int)
-args = parser.parse_args()
+preprocessor = hub.KerasLayer("https://tfhub.dev/google/universal-sentence-encoder-cmlm/multilingual-preprocess/2")
+encoder = hub.KerasLayer("https://tfhub.dev/google/universal-sentence-encoder-cmlm/multilingual-base/1")
 
 STOPWORDS = [
-    "0o", "0s", "3a", "3b", "3d", "6b", "6o", "a", "a1", "a2", "a3", "a4", "ab", "able", "about", "above", "abst", "ac",
-    "accordance", "according", "accordingly", "across", "act", "actually", "ad", "added", "adj", "ae", "af", "affected",
-    "affecting", "affects", "after", "afterwards", "ag", "again", "against", "ah", "ain", "ain't", "aj", "al", "all",
-    "allow", "allows", "almost", "alone", "along", "already", "also", "although", "always", "am", "among", "amongst",
-    "amoungst", "amount", "an", "and", "announce", "another", "any", "anybody", "anyhow", "anymore", "anyone",
-    "anything", "anyway", "anyways", "anywhere", "ao", "ap", "apart", "apparently", "appear", "appreciate",
-    "appropriate", "approximately", "ar", "are", "aren", "arent", "aren't", "arise", "around", "as", "a's", "aside",
-    "ask", "asking", "associated", "at", "au", "auth", "av", "available", "aw", "away", "awfully", "ax", "ay", "az",
-    "b", "b1", "b2", "b3", "ba", "back", "bc", "bd", "be", "became", "because", "become", "becomes", "becoming", "been",
-    "before", "beforehand", "begin", "beginning", "beginnings", "begins", "behind", "being", "believe", "below",
-    "beside", "besides", "best", "better", "between", "beyond", "bi", "bill", "biol", "bj", "bk", "bl", "bn", "both",
-    "bottom", "bp", "br", "brief", "briefly", "bs", "bt", "bu", "but", "bx", "by", "c", "c1", "c2", "c3", "ca", "call",
-    "came", "can", "cannot", "cant", "can't", "cause", "causes", "cc", "cd", "ce", "certain", "certainly", "cf", "cg",
-    "ch", "changes", "ci", "cit", "cj", "cl", "clearly", "cm", "c'mon", "cn", "co", "com", "come", "comes", "con",
-    "concerning", "consequently", "consider", "considering", "contain", "containing", "contains", "corresponding",
-    "could", "couldn", "couldnt", "couldn't", "course", "cp", "cq", "cr", "cry", "cs", "c's", "ct", "cu", "currently",
-    "cv", "cx", "cy", "cz", "d", "d2", "da", "date", "dc", "dd", "de", "definitely", "describe", "described", "despite",
-    "detail", "df", "di", "did", "didn", "didn't", "different", "dj", "dk", "dl", "do", "does", "doesn", "doesn't",
-    "doing", "don", "done", "don't", "down", "downwards", "dp", "dr", "ds", "dt", "du", "due", "during", "dx", "dy",
-    "e", "e2", "e3", "ea", "each", "ec", "ed", "edu", "ee", "ef", "effect", "eg", "ei", "eight", "eighty", "either",
-    "ej", "el", "eleven", "else", "elsewhere", "em", "empty", "en", "end", "ending", "enough", "entirely", "eo", "ep",
-    "eq", "er", "es", "especially", "est", "et", "et-al", "etc", "eu", "ev", "even", "ever", "every", "everybody",
-    "everyone", "everything", "everywhere", "ex", "exactly", "example", "except", "ey", "f", "f2", "fa", "far", "fc",
-    "few", "ff", "fi", "fifteen", "fifth", "fify", "fill", "find", "fire", "first", "five", "fix", "fj", "fl", "fn",
-    "fo", "followed", "following", "follows", "for", "former", "formerly", "forth", "forty", "found", "four", "fr",
-    "from", "front", "fs", "ft", "fu", "full", "further", "furthermore", "fy", "g", "ga", "gave", "ge", "get", "gets",
-    "getting", "gi", "give", "given", "gives", "giving", "gj", "gl", "go", "goes", "going", "gone", "got", "gotten",
-    "gr", "greetings", "gs", "gy", "h", "h2", "h3", "had", "hadn", "hadn't", "happens", "hardly", "has", "hasn",
-    "hasnt", "hasn't", "have", "haven", "haven't", "having", "he", "hed", "he'd", "he'll", "hello", "help", "hence",
-    "her", "here", "hereafter", "hereby", "herein", "heres", "here's", "hereupon", "hers", "herself", "hes", "he's",
-    "hh", "hi", "hid", "him", "himself", "his", "hither", "hj", "ho", "home", "hopefully", "how", "howbeit", "however",
-    "how's", "hr", "hs", "http", "hu", "hundred", "hy", "i", "i2", "i3", "i4", "i6", "i7", "i8", "ia", "ib", "ibid",
-    "ic", "id", "i'd", "ie", "if", "ig", "ignored", "ih", "ii", "ij", "il", "i'll", "im", "i'm", "immediate",
-    "immediately", "importance", "important", "in", "inasmuch", "inc", "indeed", "index", "indicate", "indicated",
-    "indicates", "information", "inner", "insofar", "instead", "interest", "into", "invention", "inward", "io", "ip",
-    "iq", "ir", "is", "isn", "isn't", "it", "itd", "it'd", "it'll", "its", "it's", "itself", "iv", "i've", "ix", "iy",
-    "iz", "j", "jj", "jr", "js", "jt", "ju", "just", "k", "ke", "keep", "keeps", "kept", "kg", "kj", "km", "know",
-    "known", "knows", "ko", "l", "l2", "la", "largely", "last", "lately", "later", "latter", "latterly", "lb", "lc",
-    "le", "least", "les", "less", "lest", "let", "lets", "let's", "lf", "like", "liked", "likely", "line", "little",
-    "lj", "ll", "ll", "ln", "lo", "look", "looking", "looks", "los", "lr", "ls", "lt", "ltd", "m", "m2", "ma", "made",
-    "mainly", "make", "makes", "many", "may", "maybe", "me", "mean", "means", "meantime", "meanwhile", "merely", "mg",
-    "might", "mightn", "mightn't", "mill", "million", "mine", "miss", "ml", "mn", "mo", "more", "moreover", "most",
-    "mostly", "move", "mr", "mrs", "ms", "mt", "mu", "much", "mug", "must", "mustn", "mustn't", "my", "myself", "n",
-    "n2", "na", "name", "namely", "nay", "nc", "nd", "ne", "near", "nearly", "necessarily", "necessary", "need",
-    "needn", "needn't", "needs", "neither", "never", "nevertheless", "new", "next", "ng", "ni", "nine", "ninety", "nj",
-    "nl", "nn", "no", "nobody", "non", "none", "nonetheless", "noone", "nor", "normally", "nos", "not", "noted",
-    "nothing", "novel", "now", "nowhere", "nr", "ns", "nt", "ny", "o", "oa", "ob", "obtain", "obtained", "obviously",
-    "oc", "od", "of", "off", "often", "og", "oh", "oi", "oj", "ok", "okay", "ol", "old", "om", "omitted", "on", "once",
-    "one", "ones", "only", "onto", "oo", "op", "oq", "or", "ord", "os", "ot", "other", "others", "otherwise", "ou",
-    "ought", "our", "ours", "ourselves", "out", "outside", "over", "overall", "ow", "owing", "own", "ox", "oz", "p",
-    "p1", "p2", "p3", "page", "pagecount", "pages", "par", "part", "particular", "particularly", "pas", "past", "pc",
-    "pd", "pe", "per", "perhaps", "pf", "ph", "pi", "pj", "pk", "pl", "placed", "please", "plus", "pm", "pn", "po",
-    "poorly", "possible", "possibly", "potentially", "pp", "pq", "pr", "predominantly", "present", "presumably",
-    "previously", "primarily", "probably", "promptly", "proud", "provides", "ps", "pt", "pu", "put", "py", "q", "qj",
-    "qu", "que", "quickly", "quite", "qv", "r", "r2", "ra", "ran", "rather", "rc", "rd", "re", "readily", "really",
-    "reasonably", "recent", "recently", "ref", "refs", "regarding", "regardless", "regards", "related", "relatively",
-    "research", "research-articl", "respectively", "resulted", "resulting", "results", "rf", "rh", "ri", "right", "rj",
-    "rl", "rm", "rn", "ro", "rq", "rr", "rs", "rt", "ru", "run", "rv", "ry", "s", "s2", "sa", "said", "same", "saw",
-    "say", "saying", "says", "sc", "sd", "se", "sec", "second", "secondly", "section", "see", "seeing", "seem",
-    "seemed", "seeming", "seems", "seen", "self", "selves", "sensible", "sent", "serious", "seriously", "seven",
-    "several", "sf", "shall", "shan", "shan't", "she", "shed", "she'd", "she'll", "shes", "she's", "should", "shouldn",
-    "shouldn't", "should've", "show", "showed", "shown", "showns", "shows", "si", "side", "significant",
-    "significantly", "similar", "similarly", "since", "sincere", "six", "sixty", "sj", "sl", "slightly", "sm", "sn",
-    "so", "some", "somebody", "somehow", "someone", "somethan", "something", "sometime", "sometimes", "somewhat",
-    "somewhere", "soon", "sorry", "sp", "specifically", "specified", "specify", "specifying", "sq", "sr", "ss", "st",
-    "still", "stop", "strongly", "sub", "substantially", "successfully", "such", "sufficiently", "suggest", "sup",
-    "sure", "sy", "system", "sz", "t", "t1", "t2", "t3", "take", "taken", "taking", "tb", "tc", "td", "te", "tell",
-    "ten", "tends", "tf", "th", "than", "thank", "thanks", "thanx", "that", "that'll", "thats", "that's", "that've",
-    "the", "their", "theirs", "them", "themselves", "then", "thence", "there", "thereafter", "thereby", "thered",
-    "therefore", "therein", "there'll", "thereof", "therere", "theres", "there's", "thereto", "thereupon", "there've",
-    "these", "they", "theyd", "they'd", "they'll", "theyre", "they're", "they've", "thickv", "thin", "think", "third",
-    "this", "thorough", "thoroughly", "those", "thou", "though", "thoughh", "thousand", "three", "throug", "through",
-    "throughout", "thru", "thus", "ti", "til", "tip", "tj", "tl", "tm", "tn", "to", "together", "too", "took", "top",
-    "toward", "towards", "tp", "tq", "tr", "tried", "tries", "truly", "try", "trying", "ts", "t's", "tt", "tv",
-    "twelve", "twenty", "twice", "two", "tx", "u", "u201d", "ue", "ui", "uj", "uk", "um", "un", "under",
-    "unfortunately", "unless", "unlike", "unlikely", "until", "unto", "uo", "up", "upon", "ups", "ur", "us", "use",
-    "used", "useful", "usefully", "usefulness", "uses", "using", "usually", "ut", "v", "va", "value", "various", "vd",
-    "ve", "ve", "very", "via", "viz", "vj", "vo", "vol", "vols", "volumtype", "vq", "vs", "vt", "vu", "w", "wa", "want",
-    "wants", "was", "wasn", "wasnt", "wasn't", "way", "we", "wed", "we'd", "welcome", "well", "we'll", "well-b", "went",
-    "were", "we're", "weren", "werent", "weren't", "we've", "what", "whatever", "what'll", "whats", "what's", "when",
-    "whence", "whenever", "when's", "where", "whereafter", "whereas", "whereby", "wherein", "wheres", "where's",
-    "whereupon", "wherever", "whether", "which", "while", "whim", "whither", "who", "whod", "whoever", "whole",
-    "who'll", "whom", "whomever", "whos", "who's", "whose", "why", "why's", "wi", "widely", "will", "willing", "wish",
-    "with", "within", "without", "wo", "won", "wonder", "wont", "won't", "words", "world", "would", "wouldn", "wouldnt",
-    "wouldn't", "www", "x", "x1", "x2", "x3", "xf", "xi", "xj", "xk", "xl", "xn", "xo", "xs", "xt", "xv", "xx", "y",
-    "y2", "yes", "yet", "yj", "yl", "you", "youd", "you'd", "you'll", "your", "youre", "you're", "yours", "yourself",
-    "yourselves", "you've", "yr", "ys", "yt", "z", "zero", "zi", "zz"
+    "x", "y", "your", "yours", "yourself", "yourselves", "you", "yond", "yonder", "yon", "ye", "yet", "z", "zillion", "j", "u", "umpteen", "usually", "us", "username", "uponed", "upons", "uponing", "upon", "ups", "upping", "upped", "up", "unto", "until", "unless", "unlike", "unliker", "unlikest", "under", "underneath", "use", "used", "usedest", "r", "rath", "rather", "rathest", "rathe", "re", "relate", "related", "relatively", "regarding", "really", "res", "respecting", "respectively", "q", "quite", "que", "qua", "n", "neither", "neaths", "neath", "nethe", "nethermost", "necessary", "necessariest", "necessarier", "never", "nevertheless", "nigh", "nighest", "nigher", "nine", "noone", "nobody", "nobodies", "nowhere", "nowheres", "no", "noes", "nor", "nos", "no-one", "none", "not", "notwithstanding", "nothings", "nothing", "nathless", "natheless", "t", "ten", "tills", "till", "tilled", "tilling", "to", "towards", "toward", "towardest", "towarder", "together", "too", "thy", "thyself", "thus", "than", "that", "those", "thou", "though", "thous", "thouses", "thoroughest", "thorougher", "thorough", "thoroughly", "thru", "thruer", "thruest", "thro", "through", "throughout", "throughest", "througher", "thine", "this", "thises", "they", "thee", "the", "then", "thence", "thenest", "thener", "them", "themselves", "these", "therer", "there", "thereby", "therest", "thereafter", "therein", "thereupon", "therefore", "their", "theirs", "thing", "things", "three", "two", "o", "oh", "owt", "owning", "owned", "own", "owns", "others", "other", "otherwise", "otherwisest", "otherwiser", "of", "often", "oftener", "oftenest", "off", "offs", "offest", "one", "ought", "oughts", "our", "ours", "ourselves", "ourself", "out", "outest", "outed", "outwith", "outs", "outside", "over", "overallest", "overaller", "overalls", "overall", "overs", "or", "orer", "orest", "on", "oneself", "onest", "ons", "onto", "a", "atween", "at", "athwart", "atop", "afore", "afterward", "afterwards", "after", "afterest", "afterer", "ain", "an", "any", "anything", "anybody", "anyone", "anyhow", "anywhere", "anent", "anear", "and", "andor", "another", "around", "ares", "are", "aest", "aer", "against", "again", "accordingly", "abaft", "abafter", "abaftest", "abovest", "above", "abover", "abouter", "aboutest", "about", "aid", "amidst", "amid", "among", "amongst", "apartest", "aparter", "apart", "appeared", "appears", "appear", "appearing", "appropriating", "appropriate", "appropriatest", "appropriates", "appropriater", "appropriated", "already", "always", "also", "along", "alongside", "although", "almost", "all", "allest", "aller", "allyou", "alls", "albeit", "awfully", "as", "aside", "asides", "aslant", "ases", "astrider", "astride", "astridest", "astraddlest", "astraddler", "astraddle", "availablest", "availabler", "available", "aughts", "aught", "vs", "v", "variousest", "variouser", "various", "via", "vis-a-vis", "vis-a-viser", "vis-a-visest", "viz", "very", "veriest", "verier", "versus", "k", "g", "go", "gone", "good", "got", "gotta", "gotten", "get", "gets", "getting", "b", "by", "byandby", "by-and-by", "bist", "both", "but", "buts", "be", "beyond", "because", "became", "becomes", "become", "becoming", "becomings", "becominger", "becomingest", "behind", "behinds", "before", "beforehand", "beforehandest", "beforehander", "bettered", "betters", "better", "bettering", "betwixt", "between", "beneath", "been", "below", "besides", "beside", "m", "my", "myself", "mucher", "muchest", "much", "must", "musts", "musths", "musth", "main", "make", "mayest", "many", "mauger", "maugre", "me", "meanwhiles", "meanwhile", "mostly", "most", "moreover", "more", "might", "mights", "midst", "midsts", "h", "huh", "humph", "he", "hers", "herself", "her", "hereby", "herein", "hereafters", "hereafter", "hereupon", "hence", "hadst", "had", "having", "haves", "have", "has", "hast", "hardly", "hae", "hath", "him", "himself", "hither", "hitherest", "hitherer", "his", "how-do-you-do", "however", "how", "howbeit", "howdoyoudo", "hoos", "hoo", "w", "woulded", "woulding", "would", "woulds", "was", "wast", "we", "wert", "were", "with", "withal", "without", "within", "why", "what", "whatever", "whateverer", "whateverest", "whatsoeverer", "whatsoeverest", "whatsoever", "whence", "whencesoever", "whenever", "whensoever", "when", "whenas", "whether", "wheen", "whereto", "whereupon", "wherever", "whereon", "whereof", "where", "whereby", "wherewithal", "wherewith", "whereinto", "wherein", "whereafter", "whereas", "wheresoever", "wherefrom", "which", "whichever", "whichsoever", "whilst", "while", "whiles", "whithersoever", "whither", "whoever", "whosoever", "whoso", "whose", "whomever", "s", "syne", "syn", "shalling", "shall", "shalled", "shalls", "shoulding", "should", "shoulded", "shoulds", "she", "sayyid", "sayid", "said", "saider", "saidest", "same", "samest", "sames", "samer", "saved", "sans", "sanses", "sanserifs", "sanserif", "so", "soer", "soest", "sobeit", "someone", "somebody", "somehow", "some", "somewhere", "somewhat", "something", "sometimest", "sometimes", "sometimer", "sometime", "several", "severaler", "severalest", "serious", "seriousest", "seriouser", "senza", "send", "sent", "seem", "seems", "seemed", "seemingest", "seeminger", "seemings", "seven", "summat", "sups", "sup", "supping", "supped", "such", "since", "sine", "sines", "sith", "six", "stop", "stopped", "p", "plaintiff", "plenty", "plenties", "please", "pleased", "pleases", "per", "perhaps", "particulars", "particularly", "particular", "particularest", "particularer", "pro", "providing", "provides", "provided", "provide", "probably", "l", "layabout", "layabouts", "latter", "latterest", "latterer", "latterly", "latters", "lots", "lotting", "lotted", "lot", "lest", "less", "ie", "ifs", "if", "i", "info", "information", "itself", "its", "it", "is", "idem", "idemer", "idemest", "immediate", "immediately", "immediatest", "immediater", "in", "inwards", "inwardest", "inwarder", "inward", "inasmuch", "into", "instead", "insofar", "indicates", "indicated", "indicate", "indicating", "indeed", "inc", "f", "fact", "facts", "fs", "figupon", "figupons", "figuponing", "figuponed", "few", "fewer", "fewest", "frae", "from", "failing", "failings", "five", "furthers", "furtherer", "furthered", "furtherest", "further", "furthering", "furthermore", "fourscore", "followthrough", "for", "forwhy", "fornenst", "formerly", "former", "formerer", "formerest", "formers", "forbye", "forby", "fore", "forever", "forer", "fores", "four", "d", "ddays", "dday", "do", "doing", "doings", "doe", "does", "doth", "downwarder", "downwardest", "downward", "downwards", "downs", "done", "doner", "dones", "donest", "dos", "dost", "did", "differentest", "differenter", "different", "describing", "describe", "describes", "described", "despiting", "despites", "despited", "despite", "during", "c", "cum", "circa", "chez", "cer", "certain", "certainest", "certainer", "cest", "canst", "cannot", "cant", "cants", "canting", "cantest", "canted", "co", "could", "couldst", "comeon", "comeons", "come-ons", "come-on", "concerning", "concerninger", "concerningest", "consequently", "considering", "e", "eg", "eight", "either", "even", "evens", "evenser", "evensest", "evened", "evenest", "ever", "everyone", "everything", "everybody", "everywhere", "every", "ere", "each", "et", "etc", "elsewhere", "else", "ex", "excepted", "excepts", "except", "excepting", "exes", "enough",
+    "assimilationism", "assimilationist", "associationisms", "associativities", "associationists", "assignabilities", "assiduousnesses", "assertivenesses", "ambassadorships", "disembarrassing", "disassociations", "dispassionately", "classifications", "counterassaults", "compassionately", "compassionating", "classlessnesses", "impassibilities", "impassabilities", "immunoassayable", "impassivenesses", "overclassifying", "overassessments", "uncompassionate", "unassailability", "thalassocracies", "classification", "unclassifiable", "associationism", "associationist", "associateships", "assistantships", "assimilability", "assassinations", "assaultiveness", "ambassadresses", "ambassadorship", "audiocassettes", "assumabilities", "classificatory", "classicalities", "contrabassoons", "counterassault", "contrabassists", "compassionless", "compassionates", "compassionated", "disassociating", "disassociation", "disembarrassed", "disembarrasses", "embarrassments", "embarrassingly", "encompassments", "johnsongrasses", "impassableness", "hardinggrasses", "unassumingness", "thoroughbasses", "videocassettes", "weatherglasses", "subclassifying", "pseudoclassics", "overassessment", "overclassified", "overclassifies", "overassertions", "neoclassicists", "passementeries", "passionflowers", "passionateness", "misclassifying", "misassumptions", "microcassettes", "neoclassicisms", "embarrassment", "compassionate", "assemblywoman", "dispassionate", "videocassette", "audiocassette", "neoclassicism", "underclassman", "unsurpassable", "upperclassman", "unassimilated", "postclassical", "unembarrassed", "assistantship", "passionflower", "semiclassical", "contrabassoon", "passementerie", "unimpassioned", "thalassocracy", "gyrocompasses", "glasspapering", "impassibility", "impassiveness", "impassivities", "impassability", "contrabassist", "classlessness", "embarrassedly", "embarrassable", "disassemblies", "disassembling", "disassociated", "disassociates", "declassifying", "gallowglasses", "glassblowings", "fiberglassing", "encompassment", "assimilations", "associational", "associateship", "associativity", "associatively", "assertiveness", "asseverations", "assignability", "assiduousness", "assemblywomen", "assemblagists", "assassinating", "assassination", "assassinators", "anticlassical", "antimacassars", "ambassadorial", "assurednesses", "assortatively", "thalassocrats", "upperclassmen", "unassimilable", "unassertively", "underclassmen", "unassuageable", "passivenesses", "neoclassicist", "nonassociated", "nonclassified", "overasserting", "overassertion", "overassertive", "microcassette", "misassembling", "misassumption", "misclassified", "misclassifies", "massivenesses", "subassemblies", "subclassified", "subclassifies", "switchgrasses", "thalassaemias", "pseudoclassic", "peppergrasses", "reclassifying", "reassemblages", "reassessments", "reassignments", "assimilation", "unassailable", "unclassified", "disassociate", "unassociated", "supermassive", "assimilative", "thalassaemia", "antimacassar", "ambassadress", "weatherglass", "thoroughbass", "disembarrass", "declassifies", "disassembles", "detasselling", "disassembled", "declassified", "embarrassing", "fricasseeing", "glassblowers", "glassblowing", "encompassing", "fiberglassed", "fiberglasses", "fibreglasses", "classicality", "classinesses", "classicistic", "classicizing", "classifiable", "contrabasses", "groundmasses", "grasshoppers", "glassinesses", "glassmakings", "glasspapered", "glassworkers", "goosegrasses", "hardinggrass", "impassioning", "immunoassays", "lemongrasses", "johnsongrass", "assaultively", "assassinator", "assassinates", "assassinated", "assentations", "assemblagist", "assimilators", "assimilatory", "assimilating", "associations", "asseverative", "assignations", "asseverating", "asseveration", "assumability", "assuagements", "bromegrasses", "bunchgrasses", "brassinesses", "cassiterites", "thalassocrat", "unassailably", "underclasses", "witchgrasses", "thalassemics", "thalassemias", "superclasses", "surpassingly", "semiclassics", "reassurances", "reassuringly", "reclassified", "reclassifies", "reassignment", "reassessment", "reassertions", "reassemblies", "reassembling", "reassemblage", "preassembled", "preassigning", "passageworks", "passionately", "passivations", "nonassertive", "nonclassroom", "nonpasserine", "nonclassical", "passacaglias", "overclassify", "overasserted", "neoclassical", "misassembled", "misassembles", "association", "unsurpassed", "associative", "impassioned", "assemblyman", "assassinate", "immunoassay", "subassembly", "grasshopper", "disassemble", "assignation", "passionless", "thalassemia", "switchgrass", "unassembled", "assimilable", "passacaglia", "misclassify", "unassertive", "gyrocompass", "passagework", "cassiterite", "peppergrass", "assentation", "gallowglass", "glassblower", "gassinesses", "encompassed", "encompasses", "detasseling", "detasselled", "disassembly", "dispassions", "embarrassed", "embarrasses", "compassable", "compassions", "coassisting", "crassnesses", "crassitudes", "crabgrasses", "cordgrasses", "cuirassiers", "classicists", "classicized", "classicizes", "classicisms", "classifying", "classifiers", "classically", "cassowaries", "glassworker", "glasspapers", "glassmakers", "glassmaking", "glasshouses", "impassivity", "impassively", "hourglasses", "harassments", "isinglasses", "knotgrasses", "assemblymen", "assemblages", "ambassadors", "assimilated", "assimilates", "assimilator", "assistances", "assoilments", "associating", "assignments", "assiduities", "assiduously", "assertively", "assessments", "asseverated", "asseverates", "carnassials", "beargrasses", "bentgrasses", "bassoonists", "bluegrasses", "assortative", "assortments", "assuagement", "assumptions", "assuredness", "preassigned", "preassuring", "postclassic", "reassurance", "reassorting", "sandglasses", "reassailing", "reassembled", "reassembles", "reasserting", "reassertion", "reassessing", "assessment", "assistance", "assumption", "assignment", "classified", "passionate", "ambassador", "compassion", "assortment", "fiberglass", "assimilate", "assemblage", "surpassing", "underclass", "unassuming", "passageway", "classicism", "unassisted", "impassable", "reassemble", "unassigned", "fibreglass", "reclassify", "classicist", "glasshouse", "lemongrass", "classifier", "declassify", "assaultive", "superclass", "dispassion", "glassmaker", "impassible", "groundmass", "assumptive", "goosegrass", "contrabass", "massasauga", "unassuaged", "cuirassier", "classicize", "bromegrass", "brassbound", "carnassial", "asseverate", "glasspaper", "glassworks", "glassworts", "glasswares", "glassiness", "grassplots", "grassroots", "grasslands", "impassably", "impassibly", "impassions", "harassment", "landmasses", "lassitudes", "madrassahs", "massacring", "massacrers", "interclass", "classiness", "classifies", "classicals", "chassepots", "cassoulets", "crevassing", "cutgrasses", "crassitude", "compassing", "coassuming", "classrooms", "classworks", "classmates", "coassisted", "embassages", "eelgrasses", "declassing", "cuirassing", "demitasses", "detasseled", "forepassed", "eyeglasses", "fricassees", "galleasses", "fricasseed", "galliasses", "assessable", "assertedly", "assertions", "assignable", "assistants", "assonances", "assoilment", "associated", "associates", "assaulters", "assistant", "assurance", "classroom", "associate", "passenger", "classical", "assertion", "encompass", "potassium", "assertive", "assistive", "embarrass", "casserole", "passivity", "assailant", "grassland", "assembler", "glassware", "classmate", "impassive", "classless", "brasserie", "bluegrass", "assiduous", "underpass", "hourglass", "lassitude", "brassiere", "sassafras", "assonance", "cassowary", "crabgrass", "demitasse", "passerine", "wineglass", "wiregrass", "assiduity", "cassoulet", "glasswork", "fricassee", "vassalage", "assumpsit", "brassware", "cassation", "overclass", "passional", "cordgrass", "madrassah", "beargrass", "impassion", "passivism", "passivate", "matelasse", "thalassic", "sargassum", "passepied", "isinglass", "sandglass", "glasswort", "grassplot", "knotgrass", "chassepot", "embassage", "cassimere", "cassingle", "assurgent", "assuasive", "paillasse", "palliasse", "outpassed", "outpasses", "outgassed", "outgasses", "passbands", "passbooks", "passadoes", "passaging", "passalong", "passively", "passivist", "passingly", "passersby", "matrasses", "massicots", "massiness", "massively", "masscults", "masseuses", "masseters", "misassign", "misassays", "repassing", "reassigns", "reasserts", "reassumed", "reassumes", "reassured", "reassures", "reassorts", "repassage", "assembly", "assuming", "password", "asserted", "assemble", "passport", "cassette", "massacre", "classify", "reassure", "assorted", "assassin", "assessor", "reassess", "trespass", "sunglass", "reassert", "assignee", "overpass", "passable", "reassign", "molasses", "passbook", "bioassay", "subclass", "spyglass", "eyeglass", "passerby", "landmass", "brassard", "classism", "reassume", "masseuse", "crevasse", "sargasso", "assignor", "basswood", "bassinet", "windlass", "brassica", "passband", "ryegrass", "declasse", "outclass", "massless", "masseter", "glassful", "glassine", "chasseur", "eelgrass", "assignat", "passible", "massicot", "ribgrass", "piassava", "sasswood", "galleass", "galliass", "curassow", "cutgrass", "crassest", "classist", "classons", "classing", "coassist", "coassume", "cassocks", "classily", "classico", "classics", "classier", "classers", "gassiest", "gassings", "degassed", "degasser", "degasses", "detassel", "glassier", "glassies", "glassily", "glassing", "glassman", "grassier", "grassily", "grassing", "harassed", "impasses", "hassling", "hassocks", "hassiums", "harasser", "harasses", "lassoers", "lassoing", "massaged", "massager", "massages", "madrassa", "kolbassi", "classes", "massive", "classic", "assumed", "passing", "passage", "passion", "assured", "assault", "passive", "embassy", "chassis", "compass", "massage", "surpass", "biomass", "impasse", "bassist", "carcass", "assuage", "canvass", "bassoon", "cassava", "cutlass", "bagasse", "cassock", "passkey", "masseur", "cassino", "cassina", "brassie", "hassock", "passant", "classon", "cassata", "wassail", "classis", "hassium", "assegai", "passado", "assagai", "babassu", "cuirass", "declass", "quassia", "cassena", "cassaba", "cassene", "rubasse", "subbass", "sassaby", "passade", "oquassa", "vinasse", "vassals", "wrasses", "wrassle", "trasses", "outpass", "passels", "passers", "massier", "massing", "massifs", "matrass", "megasse", "morassy", "sassing", "sassily", "sassier", "sassies", "tassies", "tassets", "tassels", "rassled", "rassles", "quasses", "quassin", "cassias", "cassine", "brasses", "brassed", "biassed", "biasses", "bassets", "bassett", "assorts", "assurer", "assures", "assumer", "assumes", "assuror", "asswage", "amassed", "amasser", "amasses", "assayed", "assume", "assist", "assess", "assure", "bypass", "assert", "assign", "hassle", "grassy", "assent", "classy", "glassy", "harass", "morass", "lassie", "passim", "gassed", "brassy", "massif", "vassal", "basset", "chasse", "assail", "passel", "tassel", "cassis", "wrasse", "gasser", "assize", "cassia", "assort", "repass", "strass", "tassie", "passus", "dassie", "rassle", "assoil", "assets", "assais", "admass", "assays", "basses", "camass", "bassly", "bassos", "gasses", "lasses", "lassis", "lassos", "kavass", "jassid", "hassel", "tasses", "tasset", "sasses", "sassed", "passed", "passee", "passer", "passes", "masses", "massas", "massed", "megass", "class", "asset", "glass", "grass", "brass", "assay", "masse", "crass", "amass", "sassy", "passe", "massa", "lasso", "basso", "bassi", "gassy", "massy", "tasse", "assai", "lassi", "frass", "trass", "kvass", "eyass", "bassy", "quass", "mass", "pass", "bass", "lass", "sass", "tass", "shuttlecocking", "cocksurenesses", "cockeyednesses", "cockfightings", "shuttlecocked", "shuttlecocks", "weathercocks", "cocksureness", "cockeyedness", "cockneyfying", "cockleshells", "shuttlecock", "weathercock", "cockleshell", "cockneyfied", "cockneyfies", "cockneyisms", "cockroaches", "cockinesses", "cockalorums", "cockatrices", "cockbilling", "cockchafers", "cocktailing", "coldcocking", "peacockiest", "cockamamie", "cockatrice", "cockchafer", "cockalorum", "cockneyism", "cockleburs", "cockneyish", "cockhorses", "cockeyedly", "billycocks", "cockbilled", "cockatiels", "cockateels", "cocksurely", "cocksfoots", "cockscombs", "cockswains", "cocktailed", "peacockier", "coldcocked", "poppycocks", "pinchcocks", "peacocking", "peacockish", "cockroach", "poppycock", "cockatiel", "cockscomb", "cocklebur", "billycock", "cockhorse", "cocksfoot", "pinchcock", "princocks", "recocking", "stopcocks", "uncocking", "woodcocks", "cockshuts", "cockspurs", "cockshies", "cocktails", "cockswain", "peacocked", "moorcocks", "gamecocks", "coldcocks", "cockiness", "cockerels", "cockering", "cocklofts", "cockneyfy", "cockamamy", "cockatoos", "cockapoos", "cockateel", "cockboats", "cockcrows", "cockbills", "cocktail", "woodcock", "cockeyed", "cockatoo", "cocksure", "cockerel", "stopcock", "moorcock", "gamecock", "cockspur", "cockapoo", "cockcrow", "cockboat", "cockloft", "coldcock", "gorcocks", "haycocks", "cockneys", "cockshut", "uncocked", "peacocks", "peacocky", "princock", "recocked", "seacocks", "cockpits", "cockered", "cockiest", "cockeyes", "cockbill", "bibcocks", "bawcocks", "cockaded", "cockades", "cockpit", "peacock", "cockney", "haycock", "cockade", "seacock", "cockeye", "bibcock", "gorcock", "cockups", "recocks", "uncocks", "bawcock", "cockers", "cockier", "cockily", "cocking", "cockled", "cockles", "cockle", "cocked", "cockup", "recock", "uncock", "cocky", "damnablenesses", "damnableness", "damnations", "damnation", "damnatory", "damnified", "damnifies", "bedamning", "damnable", "bedamned", "damnably", "damneder", "damnify", "damning", "bedamns", "damners", "damned", "damner", "bedamn", "dickcissels", "dickcissel", "dickenses", "dickering", "benedicks", "dickered", "benedick", "medicks", "zaddick", "medick", "inspissations", "inspissators", "inspissating", "inspissation", "inspissated", "inspissates", "inspissator", "inspissate", "pissoirs", "pissants", "pissant", "pissoir", "sourpusses", "pussytoes", "sourpuss", "pussleys", "pusslies", "pussley", "pussly"
 ]
+
+html = re.compile("<(.*?)>")
+url = re.compile("https?://\\s+|www\\.\\s+")
+nonalpha = re.compile("[^a-z]+")
+multispace = re.compile("\\s\\s+")
+multichar = re.compile("(.)\\1{2,}")
 
 
 def nltk_tag_to_wordnet_tag(nltk_tag):
@@ -121,9 +46,11 @@ def nltk_tag_to_wordnet_tag(nltk_tag):
 
 def clean(text):
     text = text.lower()
-    text = re.sub("<(.*?)>", " ", text)
-    text = re.sub("[^a-z]+", " ", text)
-    text = re.sub("\\s\\s+", " ", text)
+    text = html.sub(" ", text)
+    text = url.sub(" ", text)
+    text = nonalpha.sub(" ", text)
+    text = multispace.sub(" ", text)
+    text = multichar.sub("\\1", text)
 
     nltk_tagged = nltk.pos_tag(nltk.word_tokenize(text))
     wordnet_tagged = map(lambda x: (x[0], nltk_tag_to_wordnet_tag(x[1])), nltk_tagged)
@@ -140,56 +67,193 @@ def clean(text):
     return " ".join([word for word in lemmatized_text if word not in STOPWORDS])
 
 
-def main():
-    if args.clean:
-        if args.nobs:
-            df = pd.read_csv("comments_in.csv", index_col=0, usecols=["id", "comment_text", "obscene"], nrows=args.nobs)
-        else:
-            df = pd.read_csv("comments_in.csv", index_col=0, usecols=["id", "comment_text", "obscene"])
+def get_embeddings(sentences):
+    preprocessed_text = preprocessor(sentences)
 
+    return encoder(preprocessed_text)['pooled_output']
+
+
+def balanced_recall(y_true, y_pred):
+    recall_by_class = 0
+
+    for i in range(y_pred.shape[1]):
+        y_pred_class = y_pred[:, i]
+        y_true_class = y_true[:, i]
+
+        true_positives = backend.sum(backend.round(backend.clip(y_true_class * y_pred_class, 0, 1)))
+        possible_positives = backend.sum(backend.round(backend.clip(y_true_class, 0, 1)))
+
+        recall = true_positives / (possible_positives + backend.epsilon())
+        recall_by_class = recall_by_class + recall
+
+    return recall_by_class / y_pred.shape[1]
+
+
+def balanced_precision(y_true, y_pred):
+    precision_by_class = 0
+
+    for i in range(y_pred.shape[1]):
+        y_pred_class = y_pred[:, i]
+        y_true_class = y_true[:, i]
+
+        true_positives = backend.sum(backend.round(backend.clip(y_true_class * y_pred_class, 0, 1)))
+        predicted_positives = backend.sum(backend.round(backend.clip(y_pred_class, 0, 1)))
+
+        precision = true_positives / (predicted_positives + backend.epsilon())
+        precision_by_class = precision_by_class + precision
+
+    return precision_by_class / y_pred.shape[1]
+
+
+def balanced_f1_score(y_true, y_pred):
+    precision = balanced_precision(y_true, y_pred)
+    recall = balanced_recall(y_true, y_pred)
+
+    return 2 * ((precision * recall) / (precision + recall + backend.epsilon()))
+
+
+def train():
+    if args.nobs:
+        df = pd.read_csv("comments_in.csv", index_col=0, usecols=["id", "comment_text", "obscene"], nrows=args.nobs)
+    else:
+        df = pd.read_csv("comments_in.csv", index_col=0, usecols=["id", "comment_text", "obscene"])
+
+    curses = list(pd.read_csv("curses_in.csv", names=["curses"])["curses"])
+
+    if args.clean:
         with alive_bar(len(df.index), title="Cleaning") as bar:
             for i, comment in df["comment_text"].iteritems():
                 df.at[i, "comment_text"] = clean(comment)
 
                 bar()
 
-        curses = list(pd.read_csv("curses_in.csv", names=["curses"])["curses"])
-
         for curse in curses:
             df[curse] = df["comment_text"].str.contains(curse)
 
         df = df[df[curses].sum(axis=1) == 1]
+        df["Label"] = 0
 
-        with open("comments_out.txt", "w") as txt:
-            with alive_bar(len(df.index), title="Writing") as bar:
-                for i, row in df.iterrows():
-                    if row["obscene"]:
-                        txt.write("__" + row.index[row == True][-1] + "__ " + row["comment_text"] + "\n")
-                    else:
-                        txt.write("__clean__ " + row["comment_text"] + "\n")
+        with alive_bar(len(df.index), title="Analyzing") as bar:
+            for i, row in df.iterrows():
+                if row["obscene"]:
+                    df.at[i, "Label"] = list(row)[2:].index(True) + 1
 
-                    bar()
+                bar()
+
+        df[["Label", "comment_text"]].to_csv("comments_out.csv")
 
     if args.train:
-        model = fasttext.train_supervised(
-            "comments_out.txt",
-            label="__",
-            ws=5,
-            wordNgrams=5,
-            minn=2,
-            maxn=15,
-            lr=.5,
-            epoch=50,
-            loss="hs"
+        if args.nobs:
+            df = pd.read_csv("comments_out.csv", names=["id", "Label", "Text"], skiprows=1, index_col="id", nrows=args.nobs)
+        else:
+            df = pd.read_csv("comments_out.csv", names=["id", "Label", "Text"], skiprows=1, index_col="id")
+
+        num_classes = len(df["Label"].value_counts())
+
+        y = tf.keras.utils.to_categorical(df["Label"].values, num_classes=num_classes)
+        x_train, x_test, y_train, y_test = train_test_split(df["Text"], y, test_size=0.25)
+
+        i = tf.keras.layers.Input(shape=(), dtype=tf.string, name="text")
+        x = preprocessor(i)
+        x = encoder(x)
+        x = tf.keras.layers.Dropout(.2, name="dropout")(x["pooled_output"])
+        x = tf.keras.layers.Dense(num_classes, activation="softmax", name="output")(x)
+
+        n_epochs = 100
+
+        model = tf.keras.Model(i, x)
+
+        metrics = [
+            tf.keras.metrics.CategoricalAccuracy(name="accuracy"),
+            balanced_recall,
+            balanced_precision,
+            balanced_f1_score
+        ]
+
+        earlystop_callback = tf.keras.callbacks.EarlyStopping(
+            monitor="val_balanced_f1_score",
+            patience=3,
+            restore_best_weights=True,
+            mode="max",
+            min_delta=.01
         )
 
-        print(json.dumps(model.test_label("comments_out.txt"), indent=2, sort_keys=True))
-        model.save_model("curse_model.ftz")
+        model.compile(
+            optimizer="adam",
+            loss="categorical_crossentropy",
+            metrics=metrics
+        )
 
-    model = fasttext.load_model("curse_model.ftz")
+        model_fit = model.fit(
+            x_train,
+            y_train,
+            epochs=n_epochs,
+            validation_data=(x_test, y_test),
+            callbacks=[earlystop_callback]
+        )
 
-    print(model.predict("mment assume"))
+        metric_list = list(model_fit.history.keys())
+        num_metrics = int(len(metric_list)/2)
+
+        fig, ax = plt.subplots(nrows=1, ncols=num_metrics, figsize=(30, 5))
+
+        for i in range(num_metrics):
+            ax[i].plot(model_fit.history[metric_list[i]], marker="o", label=metric_list[i].replace("_", " "))
+            ax[i].plot(model_fit.history[metric_list[i+num_metrics]], marker="o", label=metric_list[i+num_metrics].replace("_", " "))
+            ax[i].set_xlabel("epochs", fontsize=14)
+            ax[i].set_title(metric_list[i].replace("_", " "), fontsize=20)
+            ax[i].legend(loc="lower left")
+
+        plt.show()
+
+        model.save("classifier")
+
+    model = tf.keras.models.load_model(
+        "classifier",
+        custom_objects={
+            "balanced_recall": balanced_recall,
+            "balanced_precision": balanced_precision,
+            "balanced_f1_score": balanced_f1_score
+        }
+    )
+
+    test_strings = [
+        clean(string) for string in [
+            "fuck Jonathan and all of his friends",
+            "i wish you would go suck a cock",
+            "of course hes just another dick and harry",
+            "she got dicked down last night"
+        ]
+    ]
+
+    np.set_printoptions(suppress=True)
+
+    print(
+        json.dumps(
+            dict(
+                zip(
+                    test_strings,
+                    [
+                        dict(
+                            zip(
+                                ["clean"] + curses, np.round(pred, 2).astype(float)
+                            )
+                        ) for pred in model.predict(test_strings)
+                    ]
+                )
+            ),
+            indent=2
+        )
+    )
 
 
 if __name__ == '__main__':
-    main()
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--clean", help="reclean the dataset", action="store_true")
+    parser.add_argument("--train", help="retrain the model", action="store_true")
+    parser.add_argument("--nobs", help="number of observations to consider", type=int)
+    args = parser.parse_args()
+
+    train()
